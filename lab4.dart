@@ -25,8 +25,6 @@ class ProfilePage extends StatefulWidget {
 
 class _ProfilePageState extends State<ProfilePage> {
   bool following = false;
-  bool liked = false;
-  bool disliked = false;
 
   int likes = 55;
   int dislikes = 0;
@@ -95,25 +93,12 @@ class _ProfilePageState extends State<ProfilePage> {
                     IconButton(
                       onPressed: () {
                         setState(() {
-                          if (liked) {
-                            liked = false;
-                            likes--;
-                          } else {
-                            liked = true;
-                            likes++;
-
-                            if (disliked) {
-                              disliked = false;
-                              dislikes--;
-                            }
-                          }
+                          likes++;
                         });
                       },
-                      icon: Icon(
-                        liked
-                            ? Icons.thumb_up
-                            : Icons.thumb_up_outlined,
-                        color: liked ? Colors.blue : Colors.grey,
+                      icon: const Icon(
+                        Icons.thumb_up,
+                        color: Colors.blue,
                       ),
                     ),
 
@@ -124,25 +109,12 @@ class _ProfilePageState extends State<ProfilePage> {
                     IconButton(
                       onPressed: () {
                         setState(() {
-                          if (disliked) {
-                            disliked = false;
-                            dislikes--;
-                          } else {
-                            disliked = true;
-                            dislikes++;
-
-                            if (liked) {
-                              liked = false;
-                              likes--;
-                            }
-                          }
+                          dislikes++;
                         });
                       },
-                      icon: Icon(
-                        disliked
-                            ? Icons.thumb_down
-                            : Icons.thumb_down_outlined,
-                        color: disliked ? Colors.red : Colors.grey,
+                      icon: const Icon(
+                        Icons.thumb_down,
+                        color: Colors.red,
                       ),
                     ),
 
@@ -154,8 +126,6 @@ class _ProfilePageState extends State<ProfilePage> {
                   onPressed: () {
                     setState(() {
                       following = false;
-                      liked = false;
-                      disliked = false;
                       likes = 55;
                       dislikes = 0;
                       followers = 0;
