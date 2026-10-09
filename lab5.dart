@@ -1,3 +1,4 @@
+
 import 'package:flutter/material.dart';
 
 void main() {
@@ -74,8 +75,15 @@ class ProductPage extends StatelessWidget {
                         Icons.star,
                         color: Colors.amber,
                       ),
-                      const Text(" 4.9 (248 reviews)"),
-                      const Spacer(),
+                      const SizedBox(width: 4),
+                      const Expanded(
+                        child: Text(
+                          "4.9 (248 reviews)",
+                          overflow: TextOverflow.ellipsis,
+                          maxLines: 1,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
                       const Text(
                         "\$49.99",
                         style: TextStyle(
@@ -123,14 +131,19 @@ class ProductPage extends StatelessWidget {
           Padding(
             padding: const EdgeInsets.all(16),
             child: SizedBox(
-              width: double.infinity,
               height: 50,
-              child: ElevatedButton(
-                onPressed: () {},
-                child: const Text(
-                  "Add to Cart",
-                  style: TextStyle(fontSize: 18),
-                ),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: ElevatedButton(
+                      onPressed: () {},
+                      child: const Text(
+                        "Add to Cart",
+                        style: TextStyle(fontSize: 18),
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
           ),
@@ -139,3 +152,4 @@ class ProductPage extends StatelessWidget {
     );
   }
 }
+
