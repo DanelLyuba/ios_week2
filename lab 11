@@ -1,0 +1,525 @@
+import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+import 'local_storage.dart';
+import 'note_item.dart';
+
+Future<void> main() async {
+  // IMPORTANT: load the saved theme before the very first frame.
+  WidgetsFlutterBinding.ensureInitialized();
+  final prefs = await SharedPreferences.getInstance();
+  final storage = LocalStorage(prefs);
+  runApp(TravelApp(
+    storage: storage,
+    initialDarkMode: storage.darkMode,
+    initialName: storage.username,
+    initialNotes: storage.loadNotes(),
+  ));
+}
+
+class TravelApp extends StatefulWidget {
+  final LocalStorage storage;
+  final bool initialDarkMode;
+  final String initialName;
+  final List<NoteItem> initialNotes;
+
+  const TravelApp({
+    super.key,
+    required this.storage,
+    required this.initialDarkMode,
+    required this.initialName,
+    required this.initialNotes,
+  });
+
+  @override
+  State<TravelApp> createState() => _TravelAppState();
+}
+
+class _TravelAppState extends State<TravelApp> {
+  late bool _darkMode = widget.initialDarkMode;
+  late String _name = widget.initialName;
+  late List<NoteItem> _notes = List.of(widget.initialNotes);
+  String _filter = 'All';
+  Future<void> _pendingNotesSave = Future<void>.value();
+
+  final GlobalKey<ScaffoldMessengerState> _messengerKey = GlobalKey<ScaffoldMessengerState>();
+
+  static const _ink = Color(0xFF142238);
+  static const _purple = Color(0xFF7161EF);
+  static const _teal = Color(0xFF00B6A2);
+
+  // Queue disk writes so rapid clicks never save an older list last.
+  void _persistNotes() {
+    final snapshot = List<NoteItem>.of(_notes);
+    _pendingNotesSave = _pendingNotesSave.then((_) async {
+      final success = await widget.storage.saveNotes(snapshot);
+      if (!success && mounted) _showMessage('Could not save checklist');
+    }).catchError((Object error) {
+      if (mounted) _showMessage('Storage error: $error');
+    });
+  }
+
+  void _showMessage(String message) {
+    if (!mounted) return;
+    _messengerKey.currentState?.showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  Future<void> _toggleTheme(bool value) async {
+    setState(() => _darkMode = value);
+    try {
+      if (!await widget.storage.saveTheme(value)) _showMessage('Theme was not saved');
+    } catch (_) {
+      _showMessage('Theme could not be saved');
+    }
+  }
+
+  Future<void> _editName(BuildContext pageContext) async {
+    final newName = await showDialog<String>(
+      context: pageContext,
+      builder: (_) => _NameDialog(initialName: _name),
+    );
+    if (newName == null || !mounted) return;
+    final cleaned = newName.trim().isEmpty ? 'Guest User' : newName.trim();
+    setState(() => _name = cleaned);
+    try {
+      if (await widget.storage.saveUsername(cleaned)) {
+        _showMessage('Profile saved offline');
+      } else {
+        _showMessage('Profile could not be saved');
+      }
+    } catch (_) {
+      _showMessage('Profile could not be saved');
+    }
+  }
+
+  Future<void> _addNote(BuildContext pageContext) async {
+    final title = await showModalBottomSheet<String>(
+      context: pageContext,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (_) => const _AddItemSheet(),
+    );
+    if (title == null || title.trim().isEmpty || !mounted) return;
+    final now = DateTime.now();
+    final dateText = '${now.day.toString().padLeft(2, '0')}/'
+        '${now.month.toString().padLeft(2, '0')}/${now.year}';
+    setState(() {
+      _notes.insert(
+        0,
+        NoteItem(
+          id: now.microsecondsSinceEpoch.toString(),
+          title: title.trim(),
+          dateText: dateText,
+          isCompleted: false,
+        ),
+      );
+      _filter = 'All';
+    });
+    _persistNotes();
+  }
+
+  void _toggleNote(String id, bool checked) {
+    setState(() {
+      _notes = [
+        for (final note in _notes)
+          if (note.id == id) note.copyWith(isCompleted: checked) else note,
+      ];
+    });
+    _persistNotes();
+  }
+
+  void _deleteNote(String id) {
+    setState(() => _notes.removeWhere((note) => note.id == id));
+    _persistNotes();
+    _showMessage('Item removed from your checklist');
+  }
+
+  ThemeData _theme(Brightness brightness) {
+    final dark = brightness == Brightness.dark;
+    final scheme = ColorScheme.fromSeed(
+      seedColor: _purple,
+      brightness: brightness,
+      surface: dark ? const Color(0xFF111827) : const Color(0xFFF7F8FD),
+    );
+    return ThemeData(
+      useMaterial3: true,
+      brightness: brightness,
+      colorScheme: scheme,
+      scaffoldBackgroundColor: scheme.surface,
+      appBarTheme: const AppBarTheme(backgroundColor: Colors.transparent),
+      inputDecorationTheme: InputDecorationTheme(
+        filled: true,
+        fillColor: dark ? const Color(0xFF253047) : const Color(0xFFF1F2F9),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(16),
+          borderSide: BorderSide.none,
+        ),
+      ),
+      filledButtonTheme: FilledButtonThemeData(
+        style: FilledButton.styleFrom(
+          backgroundColor: _purple,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) => MaterialApp(
+        title: 'WanderList | Travel Checklist',
+        scaffoldMessengerKey: _messengerKey,
+        debugShowCheckedModeBanner: false,
+        theme: _theme(Brightness.light),
+        darkTheme: _theme(Brightness.dark),
+        themeMode: _darkMode ? ThemeMode.dark : ThemeMode.light,
+        home: Builder(builder: _buildHome),
+      );
+
+  Widget _buildHome(BuildContext context) {
+    final dark = Theme.of(context).brightness == Brightness.dark;
+    final surface = dark ? const Color(0xFF1D293C) : Colors.white;
+    final text = dark ? Colors.white : _ink;
+    final secondary = dark ? const Color(0xFFA8B5C9) : const Color(0xFF758299);
+    final visible = _notes.where((note) {
+      if (_filter == 'Pending') return !note.isCompleted;
+      if (_filter == 'Done') return note.isCompleted;
+      return true;
+    }).toList();
+    final completed = _notes.where((note) => note.isCompleted).length;
+    final progress = _notes.isEmpty ? 0.0 : completed / _notes.length;
+
+    return Scaffold(
+      body: SafeArea(
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 620),
+            child: CustomScrollView(
+              slivers: [
+                SliverPadding(
+                  padding: const EdgeInsets.fromLTRB(20, 20, 20, 12),
+                  sliver: SliverToBoxAdapter(
+                    child: Row(children: [
+                      Container(
+                        padding: const EdgeInsets.all(11),
+                        decoration: BoxDecoration(
+                          gradient: const LinearGradient(colors: [_purple, Color(0xFFA18AFF)]),
+                          borderRadius: BorderRadius.circular(17),
+                        ),
+                        child: const Icon(Icons.travel_explore_rounded, color: Colors.white, size: 26),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text('WANDERLIST',
+                                style: TextStyle(fontWeight: FontWeight.w900, letterSpacing: 2,
+                                    fontSize: 13, color: secondary)),
+                            Text('Travel checklist',
+                                style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: text)),
+                          ],
+                        ),
+                      ),
+                      IconButton.filledTonal(
+                        tooltip: 'Edit username',
+                        onPressed: () => _editName(context),
+                        icon: const Icon(Icons.person_outline_rounded),
+                      ),
+                    ]),
+                  ),
+                ),
+                SliverPadding(
+                  padding: const EdgeInsets.fromLTRB(20, 12, 20, 10),
+                  sliver: SliverToBoxAdapter(
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Text('Hello, $_name ✈️',
+                          style: TextStyle(fontSize: 28, fontWeight: FontWeight.w900, color: text)),
+                      const SizedBox(height: 4),
+                      Text('Your next adventure starts with a plan.',
+                          style: TextStyle(fontSize: 14, color: secondary)),
+                    ]),
+                  ),
+                ),
+                SliverPadding(
+                  padding: const EdgeInsets.fromLTRB(20, 14, 20, 12),
+                  sliver: SliverToBoxAdapter(
+                    child: Container(
+                      padding: const EdgeInsets.all(22),
+                      decoration: BoxDecoration(
+                        gradient: const LinearGradient(
+                          begin: Alignment.topLeft,
+                          end: Alignment.bottomRight,
+                          colors: [Color(0xFF7562ED), Color(0xFF3A63BD), Color(0xFF188FAD)],
+                        ),
+                        borderRadius: BorderRadius.circular(26),
+                        boxShadow: [BoxShadow(
+                          color: _purple.withOpacity(dark ? .12 : .23),
+                          blurRadius: 26,
+                          offset: const Offset(0, 14),
+                        )],
+                      ),
+                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        Row(children: [
+                          const Icon(Icons.airplanemode_active_rounded, color: Colors.white70),
+                          const SizedBox(width: 8),
+                          const Expanded(child: Text('YOUR TRIP READINESS',
+                              style: TextStyle(color: Colors.white70, fontSize: 12,
+                                  letterSpacing: 1.5, fontWeight: FontWeight.w800))),
+                          const Icon(Icons.auto_awesome_rounded, color: Colors.white70),
+                        ]),
+                        const SizedBox(height: 20),
+                        Text('${(progress * 100).round()}%',
+                            style: const TextStyle(color: Colors.white, fontSize: 45,
+                                fontWeight: FontWeight.w900, height: 1)),
+                        const SizedBox(height: 6),
+                        Text('$completed of ${_notes.length} items packed',
+                            style: const TextStyle(color: Colors.white, fontSize: 15)),
+                        const SizedBox(height: 20),
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(30),
+                          child: LinearProgressIndicator(
+                            value: progress,
+                            minHeight: 9,
+                            backgroundColor: Colors.white24,
+                            valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFF78F6DD)),
+                          ),
+                        ),
+                      ]),
+                    ),
+                  ),
+                ),
+                SliverPadding(
+                  padding: const EdgeInsets.fromLTRB(20, 6, 20, 14),
+                  sliver: SliverToBoxAdapter(
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+                      decoration: BoxDecoration(color: surface, borderRadius: BorderRadius.circular(18)),
+                      child: Row(children: [
+                        Icon(dark ? Icons.dark_mode_rounded : Icons.light_mode_rounded,
+                            color: _purple),
+                        const SizedBox(width: 12),
+                        Expanded(child: Text('Dark mode', style: TextStyle(
+                            color: text, fontWeight: FontWeight.w700))),
+                        Switch.adaptive(value: _darkMode, onChanged: _toggleTheme),
+                      ]),
+                    ),
+                  ),
+                ),
+                SliverPadding(
+                  padding: const EdgeInsets.fromLTRB(20, 6, 20, 10),
+                  sliver: SliverToBoxAdapter(
+                    child: Row(children: [
+                      Expanded(child: Text('My checklist',
+                          style: TextStyle(color: text, fontSize: 22, fontWeight: FontWeight.w900))),
+                      Text('${_notes.length} items', style: TextStyle(color: secondary)),
+                    ]),
+                  ),
+                ),
+                SliverPadding(
+                  padding: const EdgeInsets.fromLTRB(20, 0, 20, 13),
+                  sliver: SliverToBoxAdapter(
+                    child: Wrap(spacing: 8, runSpacing: 5,
+                      children: ['All', 'Pending', 'Done'].map((filter) => ChoiceChip(
+                        label: Text(filter),
+                        selected: _filter == filter,
+                        onSelected: (_) => setState(() => _filter = filter),
+                        selectedColor: _purple.withOpacity(dark ? .32 : .16),
+                        side: BorderSide.none,
+                      )).toList(),
+                    ),
+                  ),
+                ),
+                if (visible.isEmpty)
+                  SliverPadding(
+                    padding: const EdgeInsets.fromLTRB(20, 20, 20, 110),
+                    sliver: SliverToBoxAdapter(
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(vertical: 38, horizontal: 25),
+                        decoration: BoxDecoration(
+                          color: surface,
+                          borderRadius: BorderRadius.circular(22),
+                        ),
+                        child: Column(children: [
+                          const Icon(Icons.luggage_outlined, color: _teal, size: 48),
+                          const SizedBox(height: 12),
+                          Text(_notes.isEmpty ? 'Ready to explore?' : 'Nothing in this filter',
+                              style: TextStyle(color: text, fontWeight: FontWeight.w800, fontSize: 18)),
+                          const SizedBox(height: 6),
+                          Text(_notes.isEmpty
+                              ? 'Add your passport, tickets and travel essentials.'
+                              : 'Try another filter or add a new item.',
+                              textAlign: TextAlign.center, style: TextStyle(color: secondary)),
+                        ]),
+                      ),
+                    ),
+                  )
+                else
+                  SliverPadding(
+                    padding: const EdgeInsets.fromLTRB(20, 0, 20, 110),
+                    sliver: SliverList.builder(
+                      itemCount: visible.length,
+                      itemBuilder: (context, index) {
+                        final note = visible[index];
+                        return Padding(
+                          key: ValueKey(note.id),
+                          padding: const EdgeInsets.only(bottom: 10),
+                          child: Container(
+                            decoration: BoxDecoration(
+                              color: surface,
+                              borderRadius: BorderRadius.circular(20),
+                            ),
+                            child: ListTile(
+                              contentPadding: const EdgeInsets.fromLTRB(10, 7, 7, 7),
+                              leading: Checkbox(
+                                value: note.isCompleted,
+                                activeColor: _teal,
+                                onChanged: (checked) => _toggleNote(note.id, checked ?? false),
+                              ),
+                              title: Text(note.title,
+                                style: TextStyle(
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.w700,
+                                  color: note.isCompleted ? secondary : text,
+                                  decoration: note.isCompleted ? TextDecoration.lineThrough : null,
+                                )),
+                              subtitle: Padding(
+                                padding: const EdgeInsets.only(top: 4),
+                                child: Text('Added ${note.dateText}',
+                                    style: TextStyle(color: secondary, fontSize: 12)),
+                              ),
+                              trailing: IconButton(
+                                tooltip: 'Delete ${note.title}',
+                                icon: const Icon(Icons.delete_outline_rounded),
+                                color: secondary,
+                                onPressed: () => _deleteNote(note.id),
+                              ),
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ),
+      ),
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () => _addNote(context),
+        backgroundColor: _purple,
+        foregroundColor: Colors.white,
+        icon: const Icon(Icons.add_rounded),
+        label: const Text('Add travel item', style: TextStyle(fontWeight: FontWeight.w800)),
+      ),
+    );
+  }
+}
+
+// Keep TextEditingController alive until the modal route finishes its animation.
+class _AddItemSheet extends StatefulWidget {
+  const _AddItemSheet();
+
+  @override
+  State<_AddItemSheet> createState() => _AddItemSheetState();
+}
+
+class _AddItemSheetState extends State<_AddItemSheet> {
+  final _controller = TextEditingController();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    final value = _controller.text.trim();
+    if (value.isNotEmpty) Navigator.of(context).pop(value);
+  }
+
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: EdgeInsets.fromLTRB(
+          22, 4, 22, MediaQuery.viewInsetsOf(context).bottom + 24,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            const Text('Add to your trip',
+                style: TextStyle(fontSize: 24, fontWeight: FontWeight.w800)),
+            const SizedBox(height: 8),
+            Text('What do you need to pack or remember?',
+                style: TextStyle(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant)),
+            const SizedBox(height: 20),
+            TextField(
+              controller: _controller,
+              autofocus: true,
+              maxLength: 70,
+              textCapitalization: TextCapitalization.sentences,
+              textInputAction: TextInputAction.done,
+              decoration: const InputDecoration(
+                hintText: 'e.g. Passport, power bank, tickets',
+                prefixIcon: Icon(Icons.luggage_outlined),
+              ),
+              onSubmitted: (_) => _submit(),
+            ),
+            const SizedBox(height: 12),
+            FilledButton.icon(
+              onPressed: _submit,
+              icon: const Icon(Icons.add_rounded),
+              label: const Text('Add item'),
+              style: FilledButton.styleFrom(
+                  minimumSize: const Size.fromHeight(52)),
+            ),
+          ],
+        ),
+      );
+}
+
+class _NameDialog extends StatefulWidget {
+  final String initialName;
+  const _NameDialog({required this.initialName});
+
+  @override
+  State<_NameDialog> createState() => _NameDialogState();
+}
+
+class _NameDialogState extends State<_NameDialog> {
+  late final TextEditingController _controller = TextEditingController(
+      text: widget.initialName == 'Guest User' ? '' : widget.initialName);
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+        title: const Text('Your travel profile'),
+        content: TextField(
+          controller: _controller,
+          autofocus: true,
+          maxLength: 30,
+          textCapitalization: TextCapitalization.words,
+          decoration: const InputDecoration(
+            labelText: 'Display name',
+            hintText: 'e.g. Alex',
+            prefixIcon: Icon(Icons.person_outline_rounded),
+          ),
+          onSubmitted: (value) => Navigator.of(context).pop(value),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.of(context).pop(),
+              child: const Text('Cancel')),
+          FilledButton(
+            onPressed: () => Navigator.of(context).pop(_controller.text),
+            child: const Text('Save'),
+          ),
+        ],
+      );
+}
